@@ -1,36 +1,151 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Next.js Authentication App with Supabase
 
-## Getting Started
+A modern Next.js application with authentication powered by Supabase, featuring login, signup, and dashboard functionality.
 
-First, run the development server:
+## Features
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+- 🔐 User authentication (login/signup/signout)
+- 📱 Responsive design with Tailwind CSS
+- 🗄️ SQLite database for development
+- 🐳 Docker support
+- 🚀 Supabase integration for production
+- ⚡ Next.js 15 with App Router
+
+## Quick Start
+
+### Development (SQLite)
+
+1. **Install dependencies:**
+   ```bash
+   npm install
+   ```
+
+2. **Set up the database:**
+   ```bash
+   npm run db:generate
+   npm run db:push
+   ```
+
+3. **Start the development server:**
+   ```bash
+   npm run dev
+   ```
+
+4. **Open your browser:**
+   Navigate to [http://localhost:3000](http://localhost:3000)
+
+### Production with Supabase
+
+1. **Start Supabase services:**
+   ```bash
+   docker-compose up -d supabase-db supabase-auth supabase-rest
+   ```
+
+2. **Build and run the app:**
+   ```bash
+   docker-compose up nextjs-app
+   ```
+
+### Full Docker Setup
+
+1. **Run everything with Docker:**
+   ```bash
+   docker-compose up
+   ```
+
+## Project Structure
+
+```
+src/
+├── app/
+│   ├── login/          # Login page
+│   ├── signup/         # Signup page
+│   ├── dashboard/      # Protected dashboard
+│   └── page.tsx        # Home page
+├── components/         # Reusable components
+└── lib/
+    ├── supabase.ts     # Supabase client
+    ├── prisma.ts       # Prisma client
+    └── validations.ts  # Zod schemas
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Environment Variables
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Create a `.env.local` file with:
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```env
+# Database
+DATABASE_URL="file:./dev.db"
 
-## Learn More
+# Supabase
+NEXT_PUBLIC_SUPABASE_URL="http://localhost:3001"
+NEXT_PUBLIC_SUPABASE_ANON_KEY="your-anon-key"
 
-To learn more about Next.js, take a look at the following resources:
+# App
+NEXT_PUBLIC_APP_URL="http://localhost:3000"
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Available Scripts
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+- `npm run dev` - Start development server
+- `npm run build` - Build for production
+- `npm run start` - Start production server
+- `npm run db:generate` - Generate Prisma client
+- `npm run db:push` - Push schema to database
+- `npm run db:migrate` - Run database migrations
+- `npm run db:studio` - Open Prisma Studio
 
-## Deploy on Vercel
+## Authentication Flow
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+1. **Home Page** (`/`) - Landing page with login/signup links
+2. **Login** (`/login`) - User authentication
+3. **Signup** (`/signup`) - User registration
+4. **Dashboard** (`/dashboard`) - Protected page with user info and signout
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Technologies Used
+
+- **Framework:** Next.js 15
+- **Authentication:** Supabase Auth
+- **Database:** SQLite (dev) / PostgreSQL (prod)
+- **ORM:** Prisma
+- **Styling:** Tailwind CSS
+- **Validation:** Zod
+- **Containerization:** Docker
+
+## Development Notes
+
+- The app uses SQLite for development and testing
+- Supabase is configured for production use
+- All authentication pages are responsive
+- Protected routes redirect to login if not authenticated
+- Environment variables are loaded from `.env.local`
+
+## Troubleshooting
+
+### Common Issues
+
+1. **Prisma Client not generated:**
+   ```bash
+   npm run db:generate
+   ```
+
+2. **Database not created:**
+   ```bash
+   npm run db:push
+   ```
+
+3. **Port conflicts:**
+   - Next.js: 3000
+   - Supabase REST: 3001
+   - Supabase Auth: 9999
+   - PostgreSQL: 5432
+
+4. **Docker issues:**
+   ```bash
+   docker-compose down
+   docker-compose up --build
+   ```
+
+## License
+
+MIT License

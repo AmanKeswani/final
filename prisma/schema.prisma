@@ -9,20 +9,172 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
+  provider = "sqlite"
   url      = env("DATABASE_URL")
-  directUrl = env("DIRECT_URL")
+}
+
+enum UserRole {
+  USER
+  MANAGER
+  SUPER_ADMIN
+}
+
+enum RequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum RequestType {
+  NEW_ASSET
+  REPLACEMENT
+  COMPLAINT
+  MAINTENANCE
+}
+
+enum AssetStatus {
+  AVAILABLE
+  ASSIGNED
+  MAINTENANCE
+  RETIRED
+  LOST
 }
 
 model User {
   id        String   @id @default(cuid())
   email     String   @unique
   name      String?
+  password  String
+  role      UserRole @default(USER)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-  posts     Post[]
-
+  
+  // Relations
+  posts            Post[]
+  requests         Request[]
+  assignedAssets   AssetAssignment[]
+  assetHistory     AssetHistory[]
+  approvedRequests Request[] @relation("ApprovedBy")
+  
   @@map("users")
+}
+
+model Asset {
+  id          String      @id @default(cuid())
+  name        String
+  description String?
+  serialNumber String?    @unique
+  model       String?
+  brand       String?
+  category    String
+  status      AssetStatus @default(AVAILABLE)
+  purchaseDate DateTime?
+  warrantyExpiry DateTime?
+  value       Float?
+  location    String?
+  assetTypeId String?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  
+  // Relations
+  assetType   AssetType?  @relation(fields: [assetTypeId], references: [id], onDelete: SetNull)
+  assignments AssetAssignment[]
+  history     AssetHistory[]
+  requests    Request[]
+  
+  @@map("assets")
+}
+
+model AssetAssignment {
+  id        String    @id @default(cuid())
+  assetId   String
+  userId    String
+  assignedAt DateTime @default(now())
+  returnedAt DateTime?
+  notes     String?
+  
+  // Relations
+  asset     Asset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  user      User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@map("asset_assignments")
+}
+
+model AssetHistory {
+  id        String   @id @default(cuid())
+  assetId   String
+  userId    String?
+  action    String   // "assigned", "returned", "maintenance", "status_change", etc.
+  details   String?
+  timestamp DateTime @default(now())
+  
+  // Relations
+  asset     Asset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  user      User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+  
+  @@map("asset_history")
+}
+
+model Request {
+  id          String        @id @default(cuid())
+  type        RequestType
+  status      RequestStatus @default(PENDING)
+  title       String
+  description String
+  priority    String        @default("medium") // low, medium, high, urgent
+  deviceType  String?       // phone, laptop, tablet, desktop, etc.
+  preferences String?       // user preferences for the device
+  requestedBy String
+  approvedBy  String?
+  assetId     String?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  
+  // Relations
+  requester   User   @relation(fields: [requestedBy], references: [id], onDelete: Cascade)
+  approver    User?  @relation("ApprovedBy", fields: [approvedBy], references: [id], onDelete: SetNull)
+  asset       Asset? @relation(fields: [assetId], references: [id], onDelete: SetNull)
+  
+  @@map("requests")
+}
+
+model AssetType {
+  id          String   @id @default(cuid())
+  name        String   @unique // e.g., "Laptop", "Desktop", "Phone", "Monitor"
+  description String?
+  category    String   // e.g., "Computing", "Mobile", "Peripherals"
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  // Relations
+  assets         Asset[]
+  configurations AssetConfiguration[]
+  
+  @@map("asset_types")
+}
+
+model AssetConfiguration {
+  id           String   @id @default(cuid())
+  assetTypeId  String
+  name         String   // e.g., "RAM", "Storage", "Screen Size", "Processor"
+  description  String?
+  dataType     String   // "text", "number", "select", "boolean"
+  options      String?  // JSON string for select options
+  isRequired   Boolean  @default(false)
+  defaultValue String?
+  displayOrder Int      @default(0)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  
+  // Relations
+  assetType    AssetType @relation(fields: [assetTypeId], references: [id], onDelete: Cascade)
+  
+  @@map("asset_configurations")
 }
 
 model Post {

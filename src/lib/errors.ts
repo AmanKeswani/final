@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { ZodError } from 'zod';
+import { ZodError, type ZodIssue } from 'zod';
 import { Prisma } from '@prisma/client';
 import { ApiResponse } from './validations';
 
@@ -45,12 +45,13 @@ export function handleError(error: unknown): NextResponse<ApiResponse> {
 
   // Handle Zod validation errors
   if (error instanceof ZodError) {
+    const issues: ZodIssue[] = error.issues;
     return NextResponse.json(
       {
         success: false,
         error: 'Validation error',
-        message: error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join(', '),
-        data: error.errors,
+        message: issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`).join(', '),
+        data: issues,
       },
       { status: 400 }
     );
