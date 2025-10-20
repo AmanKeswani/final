@@ -125,9 +125,100 @@ export default function UserAssetsDetailPage() {
   const [assetsData, setAssetsData] = useState<UserAssetsData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [revokingAssetId, setRevokingAssetId] = useState<string | null>(null);
+  const [actionMessage, setActionMessage] = useState<string | null>(null);
+  const [selectedRole, setSelectedRole] = useState<string>('');
+  const [updatingRole, setUpdatingRole] = useState<boolean>(false);
   const router = useRouter();
   const params = useParams();
   const userId = params.id as string;
+
+  useEffect(() => {
+    if (assetsData?.user?.role) {
+      setSelectedRole(assetsData.user.role);
+    }
+  }, [assetsData]);
+
+  async function refreshAssetsData() {
+    try {
+      const response = await fetch(`/api/users/${userId}/assets`, {
+        method: 'GET',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success) {
+          setAssetsData(data.data);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to refresh assets data', err);
+    }
+  }
+
+  async function handleRevoke(assetId: string) {
+    if (!currentUser || currentUser.role !== 'SUPER_ADMIN') {
+      setError('You do not have permission to revoke assets');
+      return;
+    }
+    setRevokingAssetId(assetId);
+    setActionMessage(null);
+    try {
+      const reason = (typeof window !== 'undefined') ? window.prompt('Optional: reason for revocation') || undefined : undefined;
+      const response = await fetch(`/api/assets/${assetId}/revoke`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason }),
+      });
+      if (response.ok) {
+        setActionMessage('Asset revoked successfully');
+        await refreshAssetsData();
+      } else {
+        const e = await response.json();
+        setError(e.error || 'Failed to revoke asset');
+      }
+    } catch (err: any) {
+      setError(err.message || 'Failed to revoke asset');
+    } finally {
+      setRevokingAssetId(null);
+    }
+  }
+
+  async function handleRoleUpdate() {
+    if (!assetsData) return;
+    if (!currentUser || currentUser.role !== 'SUPER_ADMIN') {
+      setError('You do not have permission to change roles');
+      return;
+    }
+    if (selectedRole === assetsData.user.role) {
+      setActionMessage('No changes to save');
+      return;
+    }
+    setUpdatingRole(true);
+    setActionMessage(null);
+    try {
+      const response = await fetch(`/api/users/${assetsData.user.id}/role`, {
+        method: 'PATCH',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role: selectedRole }),
+      });
+      if (response.ok) {
+        const res = await response.json();
+        setAssetsData(prev => prev ? { ...prev, user: { ...prev.user, role: res.user.role } } : prev);
+        setActionMessage('Role updated successfully');
+      } else {
+        const e = await response.json();
+        setError(e.error || 'Failed to update role');
+      }
+    } catch (err: any) {
+      setError(err.message || 'Failed to update role');
+    } finally {
+      setUpdatingRole(false);
+    }
+  }
 
   useEffect(() => {
     const initializePage = async () => {
@@ -265,6 +356,26 @@ export default function UserAssetsDetailPage() {
                     {formatRoleName(targetUser.role)}
                   </Badge>
                 </div>
+                {currentUser?.role === 'SUPER_ADMIN' && (
+                  <div className="flex items-center space-x-2 ml-4">
+                    <select
+                      value={selectedRole}
+                      onChange={(e) => setSelectedRole(e.target.value)}
+                      className="border rounded px-2 py-1 text-sm"
+                    >
+                      <option value="USER">User</option>
+                      <option value="MANAGER">Manager</option>
+                      <option value="SUPER_ADMIN">Super Admin</option>
+                    </select>
+                    <button
+                      onClick={handleRoleUpdate}
+                      disabled={updatingRole || selectedRole === targetUser.role}
+                      className="bg-purple-600 text-white px-3 py-1 rounded hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+                    >
+                      {updatingRole ? 'Saving...' : 'Save Role'}
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -286,11 +397,11 @@ export default function UserAssetsDetailPage() {
               <div>
                 <p className="text-green-100 text-sm font-medium">Total Assignments</p>
                 <p className="text-3xl font-bold">{(() => {
-                  const allAssetIds = new Set([
+                  const uniqueAssetIds = new Set([
                     ...currentAssignments.map(a => a.asset.id),
                     ...assignmentHistory.map(a => a.asset.id)
                   ]);
-                  return allAssetIds.size;
+                  return uniqueAssetIds.size;
                 })()}</p>
               </div>
               <Activity className="h-8 w-8 text-green-200" />
@@ -365,6 +476,17 @@ export default function UserAssetsDetailPage() {
                         </div>
                       </div>
                     </div>
+                    {currentUser?.role === 'SUPER_ADMIN' && (
+                      <div className="px-6 pb-6 pt-0">
+                        <button
+                          onClick={() => handleRevoke(assignment.asset.id)}
+                          disabled={revokingAssetId === assignment.asset.id}
+                          className="bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed w-full text-sm"
+                        >
+                          {revokingAssetId === assignment.asset.id ? 'Revoking...' : 'Revoke'}
+                        </button>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>

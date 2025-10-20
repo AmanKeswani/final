@@ -17,14 +17,22 @@ interface Request {
     type: RequestType;
     description: string;
     justification?: string;
-    urgency: string;
+    // Backend now uses `priority` (string like 'low' | 'medium' | 'high') instead of `urgency`
+    priority?: string;
+    urgency?: string;
     status: RequestStatus;
     stage?: string;
     comments?: string;
     createdAt: string;
-    user: {
+    // Backend returns requester relation; keep old `user` optional for backward compatibility
+    requester?: {
         id: string;
-        name: string;
+        name?: string;
+        email: string;
+    };
+    user?: {
+        id: string;
+        name?: string;
         email: string;
     };
     asset?: {
@@ -96,6 +104,12 @@ export default function SuperAdminDashboard() {
         notes: "",
     });
     const router = useRouter();
+
+    const [toast, setToast] = useState<{ type: "success" | "error" | "info"; message: string } | null>(null);
+    const [creatingAsset, setCreatingAsset] = useState(false);
+    const [assigningAsset, setAssigningAsset] = useState(false);
+    // Status selection for the Request Details modal
+    const [statusUpdate, setStatusUpdate] = useState<RequestStatus | null>(null);
 
     useEffect(() => {
         const fetchData = async () => {
@@ -212,8 +226,16 @@ export default function SuperAdminDashboard() {
         }
     };
 
+    useEffect(() => {
+        if (toast) {
+            const id = setTimeout(() => setToast(null), 3000);
+            return () => clearTimeout(id);
+        }
+    }, [toast]);
+
     const handleCreateAsset = async (e: React.FormEvent) => {
         e.preventDefault();
+        setCreatingAsset(true);
         try {
             const response = await fetch("/api/assets", {
                 method: "POST",
@@ -241,19 +263,23 @@ export default function SuperAdminDashboard() {
                     value: "",
                 });
                 setShowNewAssetForm(false);
+                setToast({ type: "success", message: "Asset created successfully" });
             } else {
                 const errorData = await response.json();
-                alert(errorData.error || "Failed to create asset");
+                setToast({ type: "error", message: errorData.error || "Failed to create asset" });
             }
         } catch (error) {
             console.error("Error creating asset:", error);
-            alert("Failed to create asset");
+            setToast({ type: "error", message: "Failed to create asset" });
+        } finally {
+            setCreatingAsset(false);
         }
     };
 
     const handleAssignAsset = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!showAssignAssetModal) return;
+        setAssigningAsset(true);
 
         try {
             const response = await fetch(
@@ -286,13 +312,16 @@ export default function SuperAdminDashboard() {
                 }
                 setShowAssignAssetModal(null);
                 setAssignmentData({ userId: "", notes: "" });
+                setToast({ type: "success", message: "Asset assigned successfully" });
             } else {
                 const errorData = await response.json();
-                alert(errorData.error || "Failed to assign asset");
+                setToast({ type: "error", message: errorData.error || "Failed to assign asset" });
             }
         } catch (error) {
             console.error("Error assigning asset:", error);
-            alert("Failed to assign asset");
+            setToast({ type: "error", message: "Failed to assign asset" });
+        } finally {
+            setAssigningAsset(false);
         }
     };
 
@@ -340,6 +369,27 @@ export default function SuperAdminDashboard() {
 
     return (
         <div className="min-h-screen bg-gray-50">
+            {toast && (
+                <div
+                    className={`fixed top-4 right-4 z-50 rounded-md shadow-lg px-4 py-3 ${
+                        toast.type === "success"
+                            ? "bg-green-600 text-white"
+                            : toast.type === "error"
+                            ? "bg-red-600 text-white"
+                            : "bg-blue-600 text-white"
+                    }`}
+                >
+                    <div className="flex items-center">
+                        <span className="text-sm">{toast.message}</span>
+                        <button
+                            onClick={() => setToast(null)}
+                            className="ml-3 text-white/90 hover:text-white underline text-xs"
+                        >
+                            Dismiss
+                        </button>
+                    </div>
+                </div>
+            )}
             {/* Header */}
             <header className="bg-white shadow-sm border-b">
                 <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -485,13 +535,14 @@ export default function SuperAdminDashboard() {
                                                 <td className="px-6 py-4 whitespace-nowrap">
                                                     <div>
                                                         <div className="text-sm font-medium text-gray-900">
-                                                            {request.user
-                                                                .name ||
-                                                                request.user
-                                                                    .email}
+                                                            {request.requester?.name ??
+                                                                request.requester?.email ??
+                                                                request.user?.name ??
+                                                                request.user?.email ??
+                                                                "Unknown user"}
                                                         </div>
                                                         <div className="text-sm text-gray-500">
-                                                            {request.user.email}
+                                                            {request.requester?.email ?? request.user?.email ?? "—"}
                                                         </div>
                                                     </div>
                                                 </td>
@@ -538,35 +589,7 @@ export default function SuperAdminDashboard() {
                                                         </button>
                                                     )}
                                                     <button
-                                                        onClick={() => {
-                                                            alert(
-                                                                `Request Details:\n\nType: ${
-                                                                    request.type
-                                                                }\nDescription: ${
-                                                                    request.description
-                                                                }\nJustification: ${
-                                                                    request.justification ||
-                                                                    "N/A"
-                                                                }\nUrgency: ${
-                                                                    request.urgency
-                                                                }\nStatus: ${
-                                                                    request.status
-                                                                }\nStage: ${
-                                                                    request.stage ||
-                                                                    "N/A"
-                                                                }\nComments: ${
-                                                                    request.comments ||
-                                                                    "N/A"
-                                                                }\nApprover: ${
-                                                                    request
-                                                                        .approver
-                                                                        ?.name ||
-                                                                    "N/A"
-                                                                }\nCreated: ${new Date(
-                                                                    request.createdAt
-                                                                ).toLocaleString()}`
-                                                            );
-                                                        }}
+                                                        onClick={() => setSelectedRequest(request)}
                                                         className="text-gray-600 hover:text-gray-900"
                                                     >
                                                         Details
@@ -738,22 +761,23 @@ export default function SuperAdminDashboard() {
                                             />
                                         </div>
                                         <div className="col-span-2 flex space-x-3">
-                                            <button
-                                                type="submit"
-                                                className="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 transition-colors"
-                                            >
-                                                Create Asset
-                                            </button>
-                                            <button
-                                                type="button"
-                                                onClick={() =>
-                                                    setShowNewAssetForm(false)
-                                                }
-                                                className="bg-gray-300 text-gray-700 px-4 py-2 rounded-md hover:bg-gray-400 transition-colors"
-                                            >
-                                                Cancel
-                                            </button>
-                                        </div>
+                                             <button
+                                                 type="submit"
+                                                 disabled={creatingAsset}
+                                                 className="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+                                             >
+                                                 {creatingAsset ? "Creating..." : "Create Asset"}
+                                             </button>
+                                             <button
+                                                 type="button"
+                                                 onClick={() =>
+                                                     setShowNewAssetForm(false)
+                                                 }
+                                                 className="bg-gray-300 text-gray-700 px-4 py-2 rounded-md hover:bg-gray-400 transition-colors"
+                                             >
+                                                 Cancel
+                                             </button>
+                                         </div>
                                     </form>
                                 </div>
                             )}
@@ -816,12 +840,12 @@ export default function SuperAdminDashboard() {
                                                     </span>
                                                 </td>
                                                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                                                    {asset.assignments.length >
+                                                    {(asset.assignments?.length ?? 0) >
                                                     0
-                                                        ? asset.assignments[0]
-                                                              .user.name ||
-                                                          asset.assignments[0]
-                                                              .user.email
+                                                        ? asset.assignments?.[0]?.user
+                                                              .name ||
+                                                          asset.assignments?.[0]?.user
+                                                              .email
                                                         : "Unassigned"}
                                                 </td>
                                                 <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
@@ -956,72 +980,93 @@ export default function SuperAdminDashboard() {
             {/* Request Update Modal */}
             {selectedRequest && (
                 <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
-                    <div className="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white">
+                    <div className="relative top-20 mx-auto p-5 border w-[560px] shadow-lg rounded-md bg-white">
                         <div className="mt-3">
-                            <h3 className="text-lg font-medium text-gray-900 mb-4">
-                                Update Request Status
-                            </h3>
-                            <div className="space-y-3 mb-4">
+                            <h3 className="text-lg font-medium text-gray-900 mb-4">Request Details</h3>
+                            <div className="space-y-2 mb-4 text-sm">
                                 <div>
                                     <span className="font-medium">User:</span>{" "}
-                                    {selectedRequest.user.name ||
-                                        selectedRequest.user.email}
+                                    {selectedRequest.requester?.name ??
+                                        selectedRequest.requester?.email ??
+                                        selectedRequest.user?.name ??
+                                        selectedRequest.user?.email ??
+                                        "Unknown user"}
                                 </div>
                                 <div>
                                     <span className="font-medium">Type:</span>{" "}
                                     {selectedRequest.type.replace("_", " ")}
                                 </div>
                                 <div>
-                                    <span className="font-medium">
-                                        Current Status:
-                                    </span>{" "}
+                                    <span className="font-medium">Description:</span>{" "}
+                                    {selectedRequest.description || "—"}
+                                </div>
+                                <div>
+                                    <span className="font-medium">Justification:</span>{" "}
+                                    {selectedRequest.justification || "N/A"}
+                                </div>
+                                <div>
+                                    <span className="font-medium">Urgency:</span>{" "}
+                                    {selectedRequest.priority ?? selectedRequest.urgency ?? "N/A"}
+                                </div>
+                                <div>
+                                    <span className="font-medium">Status:</span>{" "}
                                     {selectedRequest.status}
                                 </div>
                                 <div>
-                                    <span className="font-medium">
-                                        Current Stage:
-                                    </span>{" "}
+                                    <span className="font-medium">Stage:</span>{" "}
                                     {selectedRequest.stage || "N/A"}
+                                </div>
+                                {selectedRequest.asset && (
+                                    <div>
+                                        <span className="font-medium">Asset:</span>{" "}
+                                        {selectedRequest.asset.name} {selectedRequest.asset.serialNumber ? `(${selectedRequest.asset.serialNumber})` : ""}
+                                    </div>
+                                )}
+                                {selectedRequest.approver && (
+                                    <div>
+                                        <span className="font-medium">Approver:</span>{" "}
+                                        {selectedRequest.approver.name || selectedRequest.approver.email}
+                                    </div>
+                                )}
+                                <div>
+                                    <span className="font-medium">Created:</span>{" "}
+                                    {new Date(selectedRequest.createdAt).toLocaleString()}
                                 </div>
                             </div>
 
                             <div className="space-y-3">
-                                {selectedRequest.status ===
-                                    RequestStatus.APPROVED && (
-                                    <button
-                                        onClick={() =>
-                                            handleRequestStatusUpdate(
-                                                selectedRequest.id,
-                                                RequestStatus.IN_PROGRESS,
-                                                "Processing"
-                                            )
-                                        }
-                                        className="w-full bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 transition-colors"
-                                    >
-                                        Mark as In Progress
-                                    </button>
-                                )}
-                                {selectedRequest.status ===
-                                    RequestStatus.IN_PROGRESS && (
-                                    <button
-                                        onClick={() =>
-                                            handleRequestStatusUpdate(
-                                                selectedRequest.id,
-                                                RequestStatus.COMPLETED,
-                                                "Completed"
-                                            )
-                                        }
-                                        className="w-full bg-green-600 text-white px-4 py-2 rounded-md hover:bg-green-700 transition-colors"
-                                    >
-                                        Mark as Completed
-                                    </button>
-                                )}
-                                <button
-                                    onClick={() => setSelectedRequest(null)}
-                                    className="w-full bg-gray-300 text-gray-700 px-4 py-2 rounded-md hover:bg-gray-400 transition-colors"
+                                <label className="block text-sm font-medium text-gray-700">Change Status</label>
+                                <select
+                                    value={statusUpdate ?? selectedRequest.status}
+                                    onChange={(e) => setStatusUpdate(e.target.value as RequestStatus)}
+                                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
                                 >
-                                    Cancel
-                                </button>
+                                    <option value={RequestStatus.PENDING}>Pending / Not viewed</option>
+                                    <option value={RequestStatus.IN_PROGRESS}>In Progress</option>
+                                    <option value={RequestStatus.APPROVED}>Approved</option>
+                                    <option value={RequestStatus.REJECTED}>Rejected</option>
+                                    <option value={RequestStatus.COMPLETED}>Completed</option>
+                                    <option value={RequestStatus.CANCELLED}>Cancelled</option>
+                                </select>
+
+                                <div className="flex gap-2">
+                                    <button
+                                        onClick={() => {
+                                            const finalStatus = statusUpdate ?? selectedRequest.status;
+                                            handleRequestStatusUpdate(selectedRequest.id, finalStatus);
+                                            setSelectedRequest(null);
+                                        }}
+                                        className="flex-1 bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 transition-colors"
+                                    >
+                                        Save
+                                    </button>
+                                    <button
+                                        onClick={() => setSelectedRequest(null)}
+                                        className="flex-1 bg-gray-300 text-gray-700 px-4 py-2 rounded-md hover:bg-gray-400 transition-colors"
+                                    >
+                                        Close
+                                    </button>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -1097,26 +1142,27 @@ export default function SuperAdminDashboard() {
                                     />
                                 </div>
                                 <div className="flex space-x-3">
-                                    <button
-                                        type="submit"
-                                        className="flex-1 bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 transition-colors"
-                                    >
-                                        Assign
-                                    </button>
-                                    <button
-                                        type="button"
-                                        onClick={() => {
-                                            setShowAssignAssetModal(null);
-                                            setAssignmentData({
-                                                userId: "",
-                                                notes: "",
-                                            });
-                                        }}
-                                        className="flex-1 bg-gray-300 text-gray-700 px-4 py-2 rounded-md hover:bg-gray-400 transition-colors"
-                                    >
-                                        Cancel
-                                    </button>
-                                </div>
+                                     <button
+                                         type="submit"
+                                         disabled={assigningAsset}
+                                         className="flex-1 bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+                                     >
+                                         {assigningAsset ? "Assigning..." : "Assign"}
+                                     </button>
+                                     <button
+                                         type="button"
+                                         onClick={() => {
+                                             setShowAssignAssetModal(null);
+                                             setAssignmentData({
+                                                 userId: "",
+                                                 notes: "",
+                                             });
+                                         }}
+                                         className="flex-1 bg-gray-300 text-gray-700 px-4 py-2 rounded-md hover:bg-gray-400 transition-colors"
+                                     >
+                                         Cancel
+                                     </button>
+                                 </div>
                             </form>
                         </div>
                     </div>

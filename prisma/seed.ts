@@ -1,4 +1,4 @@
-import { PrismaClient, UserRole } from '@prisma/client'
+import { PrismaClient, UserRole, AssetStatus } from '@prisma/client'
 import bcrypt from 'bcryptjs'
 
 const prisma = new PrismaClient()
@@ -132,6 +132,45 @@ async function main() {
     
     console.log(`  ✅ Configurations created for ${assetType.name}`)
   }
+
+  // Create 4 unassigned assets (AVAILABLE)
+  await prisma.asset.createMany({
+    data: [
+      {
+        name: 'MacBook Pro 16"',
+        brand: 'Apple',
+        model: 'MacBook Pro',
+        serialNumber: 'MBP-001-2025',
+        category: 'Computing',
+        status: AssetStatus.AVAILABLE,
+      },
+      {
+        name: 'iPhone 15 Pro',
+        brand: 'Apple',
+        model: 'iPhone 15 Pro',
+        serialNumber: 'IPH-001-2025',
+        category: 'Mobile',
+        status: AssetStatus.AVAILABLE,
+      },
+      {
+        name: 'Dell 27" Monitor',
+        brand: 'Dell',
+        model: 'U2720Q',
+        serialNumber: 'DL-27M-001-2025',
+        category: 'Peripherals',
+        status: AssetStatus.AVAILABLE,
+      },
+      {
+        name: 'ThinkPad X1 Carbon',
+        brand: 'Lenovo',
+        model: 'X1 Carbon Gen 10',
+        serialNumber: 'THINK-001-2025',
+        category: 'Computing',
+        status: AssetStatus.AVAILABLE,
+      },
+    ],
+  })
+  console.log('✅ Created 4 unassigned assets')
 
   console.log('🎉 Database seeding completed!')
   console.log('\n📋 Default Credentials:')

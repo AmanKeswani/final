@@ -250,7 +250,13 @@ export default function UserAssetsPage() {
                 <div>
                   <p className="text-green-100 text-sm font-medium">Total Assignments</p>
                   <p className="text-3xl font-bold">
-                    {assetsData.currentAssignments.length + assetsData.assignmentHistory.length}
+                    {(() => {
+                      const uniqueAssetIds = new Set([
+                        ...assetsData.currentAssignments.map(a => a.asset.id),
+                        ...assetsData.assignmentHistory.map(a => a.asset.id)
+                      ]);
+                      return uniqueAssetIds.size;
+                    })()}
                   </p>
                 </div>
                 <Clock className="h-8 w-8 text-green-200" />

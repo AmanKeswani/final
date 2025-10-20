@@ -293,11 +293,11 @@ export default function ManagerUserAssetsPage() {
               <div>
                 <p className="text-green-100 text-sm font-medium">Total Assignments</p>
                 <p className="text-3xl font-bold">{(() => {
-                  const allAssetIds = new Set([
+                  const uniqueAssetIds = new Set([
                     ...currentAssignments.map(a => a.asset.id),
                     ...assignmentHistory.map(a => a.asset.id)
                   ]);
-                  return allAssetIds.size;
+                  return uniqueAssetIds.size;
                 })()}</p>
               </div>
               <Activity className="h-8 w-8 text-green-200" />

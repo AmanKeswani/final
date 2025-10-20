@@ -87,6 +87,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Ensure the newly created asset response includes relations for consistent client rendering
     const asset = await prisma.asset.create({
       data: {
         name,
@@ -100,6 +101,15 @@ export async function POST(request: NextRequest) {
         value: value ? parseFloat(value) : null,
         location,
         status: AssetStatus.AVAILABLE
+      },
+      include: {
+        assignments: {
+          where: { returnedAt: null },
+          include: { user: { select: { id: true, name: true, email: true } } }
+        },
+        _count: {
+          select: { history: true }
+        }
       }
     });
 
