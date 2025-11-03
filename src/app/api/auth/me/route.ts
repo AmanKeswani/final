@@ -1,32 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
-import { cookies } from "next/headers";
-import { getUserById, verifyAuthToken } from "@/lib/auth";
-import { UserRole } from "@prisma/client";
+import { getCurrentUser } from "@/lib/auth-supabase";
 
 export async function GET(request: NextRequest) {
     try {
-        const cookieStore = await cookies();
-        const token = cookieStore.get("auth-token")?.value;
-        console.log("Auth check: Retrieved token from cookies:", token);
-
-        if (!token) {
-            return NextResponse.json(
-                { error: "Not authenticated" },
-                { status: 401 }
-            );
-        }
-
-        const decoded = await verifyAuthToken(token);
-        if (!decoded) {
-            return NextResponse.json({ error: "Invalid token" }, { status: 401 });
-        }
-
-        const user = await getUserById(decoded.userId);
+        const user = await getCurrentUser();
 
         if (!user) {
             return NextResponse.json(
-                { error: "User not found" },
-                { status: 404 }
+                { error: "Not authenticated" },
+                { status: 401 }
             );
         }
 

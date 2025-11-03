@@ -1,47 +1,44 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { cookies } from 'next/headers';
-import { verifyAuthToken, getUserById } from '@/lib/auth';
-import { prisma } from '@/lib/prisma';
-import { canViewAllRequests } from '@/lib/rbac';
-import { UserRole, RequestStatus, RequestType } from '@prisma/client';
+import { getCurrentUser, hasRole } from '@/lib/auth-supabase';
+import { createClient } from '@supabase/supabase-js';
+
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!
+);
 
 // GET /api/requests - Get requests (all for managers/admins, own for users)
 export async function GET(request: NextRequest) {
   try {
-    const cookieStore = await cookies();
-    const token = cookieStore.get('auth-token')?.value;
+    const user = await getCurrentUser();
 
-    if (!token) {
+    if (!user) {
       return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
 
-    const decoded = await verifyAuthToken(token);
-    if (!decoded) {
-      return NextResponse.json({ error: 'Invalid token' }, { status: 401 });
+    // Check if user can view all requests (MANAGER or SUPER_ADMIN)
+    const canViewAll = hasRole(user.role, 'MANAGER');
+
+    let query = supabase
+      .from('requests')
+      .select(`
+        *,
+        requester:users!requests_requested_by_fkey(id, name, email),
+        asset:assets(id, name, serial_number)
+      `)
+      .order('created_at', { ascending: false });
+
+    // If user can't view all requests, filter to only their own
+    if (!canViewAll) {
+      query = query.eq('requested_by', user.id);
     }
 
-    const user = await getUserById(decoded.userId);
+    const { data: requests, error } = await query;
 
-    if (!user) {
-      return NextResponse.json({ error: 'User not found' }, { status: 404 });
+    if (error) {
+      console.error('Error fetching requests:', error);
+      return NextResponse.json({ error: 'Failed to fetch requests' }, { status: 500 });
     }
-
-    const whereClause = canViewAllRequests(user.role) 
-      ? {} 
-      : { requestedBy: user.id }; // Changed from userId to requestedBy
-
-    const requests = await prisma.request.findMany({
-      where: whereClause,
-      include: {
-        requester: {
-          select: { id: true, name: true, email: true }
-        },
-        asset: {
-          select: { id: true, name: true, serialNumber: true }
-        }
-      },
-      orderBy: { createdAt: 'desc' }
-    });
 
     return NextResponse.json({ requests });
   } catch (error) {
@@ -53,22 +50,10 @@ export async function GET(request: NextRequest) {
 // POST /api/requests - Create new request
 export async function POST(request: NextRequest) {
   try {
-    const cookieStore = await cookies();
-    const token = cookieStore.get('auth-token')?.value;
-
-    if (!token) {
-      return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
-    }
-
-    const decoded = await verifyAuthToken(token);
-    if (!decoded) {
-      return NextResponse.json({ error: 'Invalid token' }, { status: 401 });
-    }
-
-    const user = await getUserById(decoded.userId);
+    const user = await getCurrentUser();
 
     if (!user) {
-      return NextResponse.json({ error: 'User not found' }, { status: 404 });
+      return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
 
     const {
@@ -89,7 +74,8 @@ export async function POST(request: NextRequest) {
     }
 
     // Validate request type
-    if (!Object.values(RequestType).includes(type)) {
+    const validTypes = ['NEW_ASSET', 'REPLACEMENT', 'REPAIR', 'UPGRADE'];
+    if (!validTypes.includes(type)) {
       return NextResponse.json(
         { error: 'Invalid request type' },
         { status: 400 }
@@ -97,34 +83,37 @@ export async function POST(request: NextRequest) {
     }
 
     // For replacement requests, asset ID is required
-    if (type === RequestType.REPLACEMENT && !assetId) {
+    if (type === 'REPLACEMENT' && !assetId) {
       return NextResponse.json(
         { error: 'Asset ID is required for replacement requests' },
         { status: 400 }
       );
     }
 
-    const newRequest = await prisma.request.create({
-      data: {
-        requestedBy: user.id,  // Changed from userId to requestedBy
+    const { data: newRequest, error } = await supabase
+      .from('requests')
+      .insert({
+        requested_by: user.id,
         type,
-        title: description.substring(0, 100), // Add title field
+        title: description.substring(0, 100),
         description,
-        priority: urgency?.toLowerCase() || 'medium', // Changed from urgency to priority
-        deviceType: deviceType || null,
+        priority: urgency?.toLowerCase() || 'medium',
+        device_type: deviceType || null,
         preferences: preferences || null,
-        assetId: assetId || null,
-        status: RequestStatus.PENDING
-      },
-      include: {
-        requester: {
-          select: { id: true, name: true, email: true }
-        },
-        asset: {
-          select: { id: true, name: true, serialNumber: true }
-        }
-      }
-    });
+        asset_id: assetId || null,
+        status: 'PENDING'
+      })
+      .select(`
+        *,
+        requester:users!requests_requested_by_fkey(id, name, email),
+        asset:assets(id, name, serial_number)
+      `)
+      .single();
+
+    if (error) {
+      console.error('Error creating request:', error);
+      return NextResponse.json({ error: 'Failed to create request' }, { status: 500 });
+    }
 
     return NextResponse.json({ request: newRequest }, { status: 201 });
   } catch (error) {

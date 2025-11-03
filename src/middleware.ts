@@ -1,14 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { jwtVerify } from "jose";
-import { UserRole } from "@prisma/client";
-
-const JWT_SECRET = process.env.NEXTAUTH_SECRET || "your-secret-key-here";
+import { createServerClient } from '@supabase/ssr';
+import { UserRole } from "@/lib/auth-supabase";
 
 // Define protected routes and their required roles
 const protectedRoutes = {
-    "/user": UserRole.USER,
-    "/manager": UserRole.MANAGER,
-    "/super-admin": UserRole.SUPER_ADMIN,
+    "/user": "USER" as UserRole,
+    "/manager": "MANAGER" as UserRole,
+    "/super-admin": "SUPER_ADMIN" as UserRole,
 };
 
 // Rate limiting store (in production, use Redis or a database)
@@ -51,6 +49,27 @@ export async function middleware(request: NextRequest) {
     const { pathname } = request.nextUrl;
     console.log("Middleware: Processing request for:", pathname);
 
+    // Create Supabase client for middleware
+    const response = NextResponse.next();
+    
+    const supabase = createServerClient(
+        process.env.NEXT_PUBLIC_SUPABASE_URL!,
+        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+        {
+            cookies: {
+                get(name: string) {
+                    return request.cookies.get(name)?.value;
+                },
+                set(name: string, value: string, options: any) {
+                    response.cookies.set({ name, value, ...options });
+                },
+                remove(name: string, options: any) {
+                    response.cookies.set({ name, value: '', ...options });
+                },
+            },
+        }
+    );
+
     // Check if the route needs protection
     const isProtectedRoute = Object.keys(protectedRoutes).some((route) =>
         pathname.startsWith(route)
@@ -59,28 +78,32 @@ export async function middleware(request: NextRequest) {
 
     // Handle protected routes first
     if (isProtectedRoute) {
-        const token = request.cookies.get("auth-token")?.value;
-        console.log("Middleware: Token found:", !!token);
-
-        // Redirect to login if no token
-        if (!token) {
-            console.log("Middleware: No token, redirecting to login");
-            return NextResponse.redirect(new URL("/login", request.url));
-        }
-
         try {
-            console.log("Middleware: Verifying token with jose...");
+            // Get the current session
+            const { data: { session }, error } = await supabase.auth.getSession();
+            
+            console.log("Middleware: Session found:", !!session);
 
-            // Convert secret to Uint8Array for jose
-            const secret = new TextEncoder().encode(JWT_SECRET);
+            // Redirect to login if no session
+            if (!session || error) {
+                console.log("Middleware: No session, redirecting to login");
+                return NextResponse.redirect(new URL("/login", request.url));
+            }
 
-            // Verify token using jose (Edge Runtime compatible)
-            const { payload } = await jwtVerify(token, secret);
+            // Get user profile from public.users table
+            const { data: userData, error: userError } = await supabase
+                .from('users')
+                .select('id, email, name, role')
+                .eq('id', session.user.id)
+                .single();
 
-            console.log("Middleware: Decoded token:", payload);
+            if (userError || !userData) {
+                console.log("Middleware: User profile not found, redirecting to login");
+                return NextResponse.redirect(new URL("/login", request.url));
+            }
 
-            const userRole = payload.role as UserRole;
-            console.log("Middleware: Token verified, user role:", userRole);
+            const userRole = userData.role as UserRole;
+            console.log("Middleware: User role:", userRole);
 
             // Check role-based access
             for (const [route, requiredRole] of Object.entries(
@@ -90,9 +113,8 @@ export async function middleware(request: NextRequest) {
                     // For hierarchical access: SUPER_ADMIN can access all, MANAGER can access USER routes
                     const hasAccess =
                         userRole === requiredRole ||
-                        userRole === UserRole.SUPER_ADMIN ||
-                        (userRole === UserRole.MANAGER &&
-                            requiredRole === UserRole.USER);
+                        userRole === "SUPER_ADMIN" ||
+                        (userRole === "MANAGER" && requiredRole === "USER");
 
                     console.log(
                         "Middleware: Checking access - userRole:",
@@ -109,11 +131,11 @@ export async function middleware(request: NextRequest) {
                         );
                         // Redirect to appropriate dashboard based on user's role
                         switch (userRole) {
-                            case UserRole.USER:
+                            case "USER":
                                 return NextResponse.redirect(
                                     new URL("/user/dashboard", request.url)
                                 );
-                            case UserRole.MANAGER:
+                            case "MANAGER":
                                 return NextResponse.redirect(
                                     new URL("/manager/dashboard", request.url)
                                 );
@@ -130,7 +152,7 @@ export async function middleware(request: NextRequest) {
 
             console.log("Middleware: Access granted, continuing...");
         } catch (error) {
-            console.log("Middleware: Token verification failed:", error);
+            console.log("Middleware: Authentication failed:", error);
             return NextResponse.redirect(new URL("/login", request.url));
         }
     }
@@ -152,7 +174,16 @@ export async function middleware(request: NextRequest) {
     }
 
     // Security headers
-    const response = NextResponse.next();
+    response.headers.set("X-Content-Type-Options", "nosniff");
+    response.headers.set("X-Frame-Options", "DENY");
+    response.headers.set("X-XSS-Protection", "1; mode=block");
+    response.headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
+
+    // CSP header
+    response.headers.set(
+        "Content-Security-Policy",
+        "default-src 'self'; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' https:; connect-src 'self' https:;"
+    );
 
     // CORS headers for API routes
     if (request.nextUrl.pathname.startsWith("/api/")) {
@@ -166,18 +197,6 @@ export async function middleware(request: NextRequest) {
             "Content-Type, Authorization"
         );
     }
-
-    // Security headers
-    response.headers.set("X-Content-Type-Options", "nosniff");
-    response.headers.set("X-Frame-Options", "DENY");
-    response.headers.set("X-XSS-Protection", "1; mode=block");
-    response.headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
-
-    // CSP header
-    response.headers.set(
-        "Content-Security-Policy",
-        "default-src 'self'; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' https:; connect-src 'self' https:;"
-    );
 
     return response;
 }

@@ -1,45 +1,31 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { cookies } from 'next/headers';
-import { verifyAuthToken, getUserById } from '@/lib/auth';
-import { prisma } from '@/lib/prisma';
-import { UserRole } from '@prisma/client';
+import { getCurrentUser } from '@/lib/auth-supabase';
+import { hasRole } from '@/lib/types';
+import { supabase } from '@/lib/supabase';
 
 // GET /api/users - Get all users (admin only)
 export async function GET(request: NextRequest) {
   try {
-    const cookieStore = await cookies();
-    const token = cookieStore.get('auth-token')?.value;
+    const user = await getCurrentUser();
 
-    if (!token) {
+    if (!user) {
       return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
 
-    const decoded = await verifyAuthToken(token);
-    if (!decoded) {
-      return NextResponse.json({ error: 'Invalid token' }, { status: 401 });
-    }
-
-    const user = await getUserById(decoded.userId);
-
-    if (!user) {
-      return NextResponse.json({ error: 'User not found' }, { status: 404 });
-    }
-
     // Only super admins can view all users
-    if (user.role !== UserRole.SUPER_ADMIN) {
+    if (!hasRole(user.role, 'SUPER_ADMIN')) {
       return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 });
     }
 
-    const users = await prisma.user.findMany({
-      select: {
-        id: true,
-        email: true,
-        name: true,
-        role: true,
-        createdAt: true
-      },
-      orderBy: { createdAt: 'desc' }
-    });
+    const { data: users, error } = await supabase
+      .from('users')
+      .select('id, email, name, role, created_at')
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.error('Error fetching users:', error);
+      return NextResponse.json({ error: 'Failed to fetch users' }, { status: 500 });
+    }
 
     return NextResponse.json({ users });
   } catch (error) {

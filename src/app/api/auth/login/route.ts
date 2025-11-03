@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { authenticateUser, createAuthToken } from "@/lib/auth";
+import { authenticateUser } from "@/lib/auth-supabase";
 import { cookies } from "next/headers";
 
 export async function POST(request: NextRequest) {
@@ -22,10 +22,8 @@ export async function POST(request: NextRequest) {
             );
         }
 
-        // Create JWT token
-        const token = await createAuthToken(user.id, user.role);
-
-        // Set cookie
+        // With Supabase, the session is automatically managed
+        // We just return the user data
         const response = NextResponse.json({
             success: true,
             user: {
@@ -35,14 +33,6 @@ export async function POST(request: NextRequest) {
                 role: user.role,
             },
         });
-
-        response.cookies.set("auth-token", token, {
-            httpOnly: true,
-            secure: process.env.NODE_ENV === "production",
-            sameSite: "lax",
-            maxAge: 60 * 60 * 24 * 7, // 7 days
-        });
-
 
         return response;
     } catch (error) {

@@ -3,8 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { getCurrentUser, logout } from '@/lib/client-auth';
-import { AuthUser } from '@/lib/auth';
-import { UserRole, RequestType, RequestStatus } from '@prisma/client';
+import { AuthUser, UserRole, RequestType, RequestStatus } from '@/lib/types';
 import { getRoleDisplayName } from '@/lib/rbac';
 
 interface Request {

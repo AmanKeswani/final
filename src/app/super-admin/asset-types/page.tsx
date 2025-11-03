@@ -3,8 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { getCurrentUser } from '@/lib/client-auth';
-import { AuthUser } from '@/lib/auth';
-import { UserRole } from '@prisma/client';
+import { AuthUser, UserRole } from '@/lib/types';
 
 interface AssetType {
   id: string;

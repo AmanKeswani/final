@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { prisma } from '@/lib/prisma'
+import { supabase } from '@/lib/supabase'
 import { z } from 'zod'
 
 // GET /api/asset-types/[id]/configurations - Get configurations for a specific asset type
@@ -10,15 +10,23 @@ export async function GET(
   const { id } = await params;
   try {
 
-    const configurations = await prisma.assetConfiguration.findMany({
-      where: {
-        assetTypeId: id,
-        isActive: true,
-      },
-      orderBy: {
-        displayOrder: 'asc',
-      },
-    })
+    const { data: configurations, error } = await supabase
+      .from('asset_configurations')
+      .select('*')
+      .eq('asset_type_id', id)
+      .eq('is_active', true)
+      .order('display_order', { ascending: true });
+
+    if (error) {
+      console.error('Error fetching asset configurations:', error)
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'Failed to fetch asset configurations',
+        },
+        { status: 500 }
+      )
+    }
 
     return NextResponse.json({
       success: true,
@@ -59,11 +67,13 @@ export async function POST(
     const validatedData = createConfigSchema.parse(body)
 
     // Verify asset type exists
-    const assetType = await prisma.assetType.findUnique({
-      where: { id },
-    })
+    const { data: assetType, error: assetTypeError } = await supabase
+      .from('asset_types')
+      .select('id')
+      .eq('id', id)
+      .single();
 
-    if (!assetType) {
+    if (assetTypeError || !assetType) {
       return NextResponse.json(
         {
           success: false,
@@ -73,12 +83,35 @@ export async function POST(
       )
     }
 
-    const configuration = await prisma.assetConfiguration.create({
-      data: {
-        ...validatedData,
-        assetTypeId: id,
-      },
-    })
+    // Convert camelCase to snake_case for Supabase
+    const supabaseData = {
+      name: validatedData.name,
+      description: validatedData.description,
+      data_type: validatedData.dataType,
+      options: validatedData.options,
+      is_required: validatedData.isRequired,
+      default_value: validatedData.defaultValue,
+      display_order: validatedData.displayOrder,
+      is_active: validatedData.isActive,
+      asset_type_id: id,
+    };
+
+    const { data: configuration, error } = await supabase
+      .from('asset_configurations')
+      .insert(supabaseData)
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Error creating asset configuration:', error)
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'Failed to create asset configuration',
+        },
+        { status: 500 }
+      )
+    }
 
     return NextResponse.json(
       {

@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { getCurrentUser } from '@/lib/client-auth';
-import type { AuthUser } from '@/lib/auth';
+import type { AuthUser } from '@/lib/types';
 
 export default function DashboardPage() {
   const [loading, setLoading] = useState(true);

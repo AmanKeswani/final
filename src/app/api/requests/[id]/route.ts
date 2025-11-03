@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { cookies } from 'next/headers';
-import { verifyAuthToken, getUserById } from '@/lib/auth';
-import { prisma } from '@/lib/prisma';
-import { canApproveRequests, canUpdateRequestStatus } from '@/lib/rbac';
-import { RequestStatus, UserRole } from '@prisma/client';
+import { getCurrentUser, hasRole } from '@/lib/auth-supabase';
+import { createClient } from '@supabase/supabase-js';
+
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!
+);
 
 // PATCH /api/requests/[id] - Update request status
 export async function PATCH(
@@ -12,21 +14,10 @@ export async function PATCH(
 ) {
   const { id } = await context.params;
   try {
-    const cookieStore = await cookies();
-    const token = cookieStore.get('auth-token')?.value;
-
-    if (!token) {
-      return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
-    }
-
-    const decoded = await verifyAuthToken(token);
-    if (!decoded) {
-      return NextResponse.json({ error: 'Invalid token' }, { status: 401 });
-    }
-    const user = await getUserById(decoded.userId);
+    const user = await getCurrentUser();
 
     if (!user) {
-      return NextResponse.json({ error: 'User not found' }, { status: 404 });
+      return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
 
     const { status } = await request.json();
@@ -39,47 +30,51 @@ export async function PATCH(
     }
 
     // Check if request exists
-    const existingRequest = await prisma.request.findUnique({
-      where: { id },
-      include: { requester: true }
-    });
+    const { data: existingRequest, error: fetchError } = await supabase
+      .from('requests')
+      .select('*, requester:users!requests_requested_by_fkey(*)')
+      .eq('id', id)
+      .single();
 
-    if (!existingRequest) {
+    if (fetchError || !existingRequest) {
       return NextResponse.json({ error: 'Request not found' }, { status: 404 });
     }
 
     // Permission checks based on status change
-    if (status === RequestStatus.APPROVED || status === RequestStatus.REJECTED) {
-      if (!canApproveRequests(user.role)) {
+    if (status === 'APPROVED' || status === 'REJECTED') {
+      if (!hasRole(user.role, 'MANAGER')) {
         return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 });
       }
     }
 
-    if (status === RequestStatus.IN_PROGRESS || status === RequestStatus.COMPLETED) {
-      if (!canUpdateRequestStatus(user.role)) {
+    if (status === 'IN_PROGRESS' || status === 'COMPLETED') {
+      if (!hasRole(user.role, 'MANAGER')) {
         return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 });
       }
     }
 
     // Update request
-    const updatedRequest = await prisma.request.update({
-      where: { id },
-      data: {
-        status,
-        approvedBy: (status === RequestStatus.APPROVED || status === RequestStatus.REJECTED) ? user.id : undefined
-      },
-      include: {
-        requester: {
-          select: { id: true, name: true, email: true }
-        },
-        asset: {
-          select: { id: true, name: true, serialNumber: true }
-        },
-        approver: {
-          select: { id: true, name: true, email: true }
-        }
-      }
-    });
+    const updateData: any = { status };
+    if (status === 'APPROVED' || status === 'REJECTED') {
+      updateData.approved_by = user.id;
+    }
+
+    const { data: updatedRequest, error: updateError } = await supabase
+      .from('requests')
+      .update(updateData)
+      .eq('id', id)
+      .select(`
+        *,
+        requester:users!requests_requested_by_fkey(id, name, email),
+        asset:assets(id, name, serial_number),
+        approver:users!requests_approved_by_fkey(id, name, email)
+      `)
+      .single();
+
+    if (updateError) {
+      console.error('Error updating request:', updateError);
+      return NextResponse.json({ error: 'Failed to update request' }, { status: 500 });
+    }
 
     return NextResponse.json({ request: updatedRequest });
   } catch (error) {
@@ -95,44 +90,29 @@ export async function GET(
 ) {
   const { id } = await context.params;
   try {
-    const cookieStore = await cookies();
-    const token = cookieStore.get('auth-token')?.value;
+    const user = await getCurrentUser();
 
-    if (!token) {
+    if (!user) {
       return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
 
-    const decoded = await verifyAuthToken(token);
-    if (!decoded) {
-      return NextResponse.json({ error: 'Invalid token' }, { status: 401 });
-    }
-    const user = await getUserById(decoded.userId);
+    const { data: requestData, error } = await supabase
+      .from('requests')
+      .select(`
+        *,
+        requester:users!requests_requested_by_fkey(id, name, email),
+        asset:assets(id, name, serial_number, category),
+        approver:users!requests_approved_by_fkey(id, name, email)
+      `)
+      .eq('id', id)
+      .single();
 
-    if (!user) {
-      return NextResponse.json({ error: 'User not found' }, { status: 404 });
-    }
-
-    const requestData = await prisma.request.findUnique({
-      where: { id },
-      include: {
-        requester: {
-          select: { id: true, name: true, email: true }
-        },
-        asset: {
-          select: { id: true, name: true, serialNumber: true, category: true }
-        },
-        approver: {
-          select: { id: true, name: true, email: true }
-        }
-      }
-    });
-
-    if (!requestData) {
+    if (error || !requestData) {
       return NextResponse.json({ error: 'Request not found' }, { status: 404 });
     }
 
     // Users can only view their own requests unless they're managers/admins
-    if (user.role === UserRole.USER && requestData.requestedBy !== user.id) {
+    if (user.role === 'USER' && requestData.requested_by !== user.id) {
       return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 });
     }
 

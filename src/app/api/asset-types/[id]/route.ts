@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { prisma } from '@/lib/prisma'
+import { supabase } from '@/lib/supabase'
 import { z } from 'zod'
 
 // PATCH /api/asset-types/[id] - Update asset type
@@ -32,11 +32,13 @@ export async function PATCH(
     const validatedData = updateAssetTypeSchema.parse(body)
 
     // Check if asset type exists
-    const existingAssetType = await prisma.assetType.findUnique({
-      where: { id },
-    })
+    const { data: existingAssetType, error: existingError } = await supabase
+      .from('asset_types')
+      .select('*')
+      .eq('id', id)
+      .single();
 
-    if (!existingAssetType) {
+    if (existingError || !existingAssetType) {
       return NextResponse.json(
         {
           success: false,
@@ -48,12 +50,12 @@ export async function PATCH(
 
     // If name is being updated, check for duplicates
     if (validatedData.name && validatedData.name !== existingAssetType.name) {
-      const duplicateAssetType = await prisma.assetType.findFirst({
-        where: {
-          name: validatedData.name,
-          id: { not: id },
-        },
-      })
+      const { data: duplicateAssetType, error: duplicateError } = await supabase
+        .from('asset_types')
+        .select('id')
+        .eq('name', validatedData.name)
+        .neq('id', id)
+        .single();
 
       if (duplicateAssetType) {
         return NextResponse.json(
@@ -66,16 +68,40 @@ export async function PATCH(
       }
     }
 
-    const assetType = await prisma.assetType.update({
-      where: { id },
-      data: validatedData,
-      include: {
-        configurations: {
-          where: { isActive: true },
-          orderBy: { name: 'asc' },
+    // Convert camelCase to snake_case for Supabase
+    const supabaseData: any = {};
+    if (validatedData.name !== undefined) supabaseData.name = validatedData.name;
+    if (validatedData.description !== undefined) supabaseData.description = validatedData.description;
+    if (validatedData.category !== undefined) supabaseData.category = validatedData.category;
+    if (validatedData.isActive !== undefined) supabaseData.is_active = validatedData.isActive;
+
+    const { data: assetType, error: updateError } = await supabase
+      .from('asset_types')
+      .update(supabaseData)
+      .eq('id', id)
+      .select(`
+        *,
+        configurations:asset_configurations!asset_configurations_asset_type_id_fkey(*)
+      `)
+      .single();
+
+    if (updateError) {
+      console.error('Error updating asset type:', updateError);
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'Failed to update asset type',
         },
-      },
-    })
+        { status: 500 }
+      )
+    }
+
+    // Filter and sort configurations
+    if (assetType.configurations) {
+      assetType.configurations = assetType.configurations
+        .filter((config: any) => config.is_active)
+        .sort((a: any, b: any) => a.name.localeCompare(b.name));
+    }
 
     return NextResponse.json({
       success: true,
@@ -124,15 +150,17 @@ export async function DELETE(
     }
 
     // Check if asset type exists
-    const existingAssetType = await prisma.assetType.findUnique({
-      where: { id },
-      include: {
-        assets: true,
-        configurations: true,
-      },
-    })
+    const { data: existingAssetType, error: existingError } = await supabase
+      .from('asset_types')
+      .select(`
+        *,
+        assets(*),
+        configurations:asset_configurations(*)
+      `)
+      .eq('id', id)
+      .single();
 
-    if (!existingAssetType) {
+    if (existingError || !existingAssetType) {
       return NextResponse.json(
         {
           success: false,
@@ -143,7 +171,7 @@ export async function DELETE(
     }
 
     // Check if there are assets using this type
-    if (existingAssetType.assets.length > 0) {
+    if (existingAssetType.assets && existingAssetType.assets.length > 0) {
       return NextResponse.json(
         {
           success: false,
@@ -154,14 +182,37 @@ export async function DELETE(
     }
 
     // Delete configurations first, then asset type
-    await prisma.$transaction([
-      prisma.assetConfiguration.deleteMany({
-        where: { assetTypeId: id },
-      }),
-      prisma.assetType.delete({
-        where: { id },
-      }),
-    ])
+    const { error: configDeleteError } = await supabase
+      .from('asset_configurations')
+      .delete()
+      .eq('asset_type_id', id);
+
+    if (configDeleteError) {
+      console.error('Error deleting configurations:', configDeleteError);
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'Failed to delete asset type configurations',
+        },
+        { status: 500 }
+      )
+    }
+
+    const { error: deleteError } = await supabase
+      .from('asset_types')
+      .delete()
+      .eq('id', id);
+
+    if (deleteError) {
+      console.error('Error deleting asset type:', deleteError);
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'Failed to delete asset type',
+        },
+        { status: 500 }
+      )
+    }
 
     return NextResponse.json({
       success: true,

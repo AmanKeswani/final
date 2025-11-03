@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createUser, createAuthToken } from '@/lib/auth';
-import { UserRole, Prisma } from '@prisma/client';
+import { createUser } from '@/lib/auth-supabase';
+import { UserRole } from '@/lib/types';
 
 export async function POST(request: NextRequest) {
   try {
@@ -21,17 +21,14 @@ export async function POST(request: NextRequest) {
     }
 
     // Validate role if provided
-    let userRole = UserRole.USER; // Default role
-    if (role && Object.values(UserRole).includes(role)) {
+    let userRole: UserRole = 'USER'; // Default role
+    if (role && ['USER', 'MANAGER', 'SUPER_ADMIN'].includes(role)) {
       userRole = role;
     }
 
     const user = await createUser(email, password, name, userRole);
 
-    // Create JWT token
-    const token = await createAuthToken(user.id, user.role);
-
-    // Set cookie
+    // With Supabase, the session is automatically managed
     const response = NextResponse.json({
       success: true,
       user: {
@@ -41,25 +38,17 @@ export async function POST(request: NextRequest) {
         role: user.role,
       },
     });
-    
-    response.cookies.set('auth-token', token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      maxAge: 60 * 60 * 24 * 7, // 7 days
-    });
 
     return response;
   } catch (error) {
     console.error('Signup error:', error instanceof Error ? error.message : 'Unknown error');
     
-    if (error instanceof Prisma.PrismaClientKnownRequestError) {
-      if (error.code === 'P2002') {
-        return NextResponse.json(
-          { error: 'An account with this email already exists' },
-          { status: 409 }
-        );
-      }
+    // Check for duplicate email error
+    if (error instanceof Error && error.message.includes('already exists')) {
+      return NextResponse.json(
+        { error: 'An account with this email already exists' },
+        { status: 409 }
+      );
     }
     
     return NextResponse.json(

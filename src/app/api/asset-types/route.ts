@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { prisma } from '@/lib/prisma'
+import { supabase } from '@/lib/supabase'
 import { z } from 'zod'
 
 // GET /api/asset-types - Get all active asset types with their configurations
@@ -8,24 +8,40 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url)
     const includeConfigs = searchParams.get('includeConfigs') === 'true'
 
-    const assetTypes = await prisma.assetType.findMany({
-      where: {
-        isActive: true,
-      },
-      include: {
-        configurations: includeConfigs ? {
-          where: {
-            isActive: true,
-          },
-          orderBy: {
-            displayOrder: 'asc',
-          },
-        } : false,
-      },
-      orderBy: {
-        name: 'asc',
-      },
-    })
+    let query = supabase
+      .from('asset_types')
+      .select(includeConfigs ? `
+        *,
+        configurations:asset_configurations(*)
+      ` : '*')
+      .eq('is_active', true)
+      .order('name', { ascending: true });
+
+    if (includeConfigs) {
+      query = query.eq('configurations.is_active', true);
+    }
+
+    const { data: assetTypes, error } = await query;
+
+    if (error) {
+      console.error('Error fetching asset types:', error)
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'Failed to fetch asset types',
+        },
+        { status: 500 }
+      )
+    }
+
+    // Sort configurations by display_order if included
+    if (includeConfigs && assetTypes) {
+      assetTypes.forEach(assetType => {
+        if (assetType.configurations) {
+          assetType.configurations.sort((a: any, b: any) => a.display_order - b.display_order);
+        }
+      });
+    }
 
     return NextResponse.json({
       success: true,
@@ -58,9 +74,11 @@ export async function POST(request: NextRequest) {
     const validatedData = createAssetTypeSchema.parse(body)
 
     // Check if asset type with same name already exists
-    const existingAssetType = await prisma.assetType.findUnique({
-      where: { name: validatedData.name },
-    })
+    const { data: existingAssetType, error: checkError } = await supabase
+      .from('asset_types')
+      .select('id')
+      .eq('name', validatedData.name)
+      .single();
 
     if (existingAssetType) {
       return NextResponse.json(
@@ -72,9 +90,30 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const assetType = await prisma.assetType.create({
-      data: validatedData,
-    })
+    // Convert camelCase to snake_case for Supabase
+    const supabaseData = {
+      name: validatedData.name,
+      description: validatedData.description,
+      category: validatedData.category,
+      is_active: validatedData.isActive,
+    };
+
+    const { data: assetType, error } = await supabase
+      .from('asset_types')
+      .insert(supabaseData)
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Error creating asset type:', error)
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'Failed to create asset type',
+        },
+        { status: 500 }
+      )
+    }
 
     return NextResponse.json(
       {

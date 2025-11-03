@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { cookies } from 'next/headers';
-import { verifyAuthToken, getUserById } from '@/lib/auth';
-import { prisma } from '@/lib/prisma';
-import { canManageAssets } from '@/lib/rbac';
-import { AssetStatus } from '@prisma/client';
+import { getCurrentUser, hasRole } from '@/lib/auth-supabase';
+import { createClient } from '@supabase/supabase-js';
+
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!
+);
 
 // POST /api/assets/[id]/return - Return asset from user
 export async function POST(
@@ -12,45 +14,33 @@ export async function POST(
 ) {
   const { id } = await context.params;
   try {
-    const cookieStore = await cookies();
-    const token = cookieStore.get('auth-token')?.value;
-
-    if (!token) {
-      return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
-    }
-
-    const decoded = await verifyAuthToken(token);
-    if (!decoded) {
-      return NextResponse.json({ error: 'Invalid token' }, { status: 401 });
-    }
-    const user = await getUserById(decoded.userId);
+    const user = await getCurrentUser();
 
     if (!user) {
-      return NextResponse.json({ error: 'User not found' }, { status: 404 });
+      return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
 
     const { condition, notes } = await request.json();
 
     // Check if asset exists and is assigned
-    const asset = await prisma.asset.findUnique({
-      where: { id },
-      include: {
-        assignments: {
-          where: { returnedAt: null },
-          include: {
-            user: {
-              select: { id: true, name: true, email: true }
-            }
-          }
-        }
-      }
-    });
+    const { data: asset, error: assetError } = await supabase
+      .from('assets')
+      .select(`
+        *,
+        assignments:asset_assignments!asset_assignments_asset_id_fkey(
+          *,
+          user:users(id, name, email)
+        )
+      `)
+      .eq('id', id)
+      .is('assignments.returned_at', null)
+      .single();
 
-    if (!asset) {
+    if (assetError || !asset) {
       return NextResponse.json({ error: 'Asset not found' }, { status: 404 });
     }
 
-    if (asset.assignments.length === 0) {
+    if (!asset.assignments || asset.assignments.length === 0) {
       return NextResponse.json(
         { error: 'Asset is not currently assigned' },
         { status: 400 }
@@ -60,45 +50,62 @@ export async function POST(
     const currentAssignment = asset.assignments[0];
 
     // Check permissions: user can return their own asset, or admin can return any asset
-    if (currentAssignment.userId !== user.id && !canManageAssets(user.role)) {
+    if (currentAssignment.user_id !== user.id && !hasRole(user.role, 'MANAGER')) {
       return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 });
     }
 
     // Determine new asset status based on condition
-    let newStatus: AssetStatus = AssetStatus.AVAILABLE;
+    let newStatus = 'AVAILABLE';
     if (condition === 'DAMAGED') {
-      newStatus = AssetStatus.MAINTENANCE;
+      newStatus = 'MAINTENANCE';
     } else if (condition === 'LOST') {
-      newStatus = AssetStatus.LOST;
+      newStatus = 'LOST';
     }
 
-    // Update assignment and asset status
-    const [updatedAssignment] = await prisma.$transaction([
-      prisma.assetAssignment.update({
-        where: { id: currentAssignment.id },
-        data: {
-          returnedAt: new Date(),
-          notes: notes ? `Return notes: ${notes} (condition: ${condition})` : `Returned (condition: ${condition})`
-        },
-        include: {
-          user: {
-            select: { id: true, name: true, email: true }
-          }
-        }
-      }),
-      prisma.asset.update({
-        where: { id },
-        data: { status: newStatus }
-      }),
-      prisma.assetHistory.create({
-        data: {
-          assetId: id,
-          userId: user.id,
-          action: 'returned',
-          details: `Asset returned by ${(currentAssignment.user?.name || currentAssignment.user?.email || 'unknown user')} in ${condition} condition`,
-        }
+    // Update assignment
+    const { data: updatedAssignment, error: assignmentError } = await supabase
+      .from('asset_assignments')
+      .update({
+        returned_at: new Date().toISOString(),
+        notes: notes ? `Return notes: ${notes} (condition: ${condition})` : `Returned (condition: ${condition})`
       })
-    ]);
+      .eq('id', currentAssignment.id)
+      .select(`
+        *,
+        user:users(id, name, email)
+      `)
+      .single();
+
+    if (assignmentError) {
+      console.error('Error updating assignment:', assignmentError);
+      return NextResponse.json({ error: 'Failed to update assignment' }, { status: 500 });
+    }
+
+    // Update asset status
+    const { error: updateError } = await supabase
+      .from('assets')
+      .update({ status: newStatus })
+      .eq('id', id);
+
+    if (updateError) {
+      console.error('Error updating asset status:', updateError);
+      // Don't fail the request if status update fails
+    }
+
+    // Create history entry
+    const { error: historyError } = await supabase
+      .from('asset_history')
+      .insert({
+        asset_id: id,
+        user_id: user.id,
+        action: 'returned',
+        notes: `Asset returned by ${(currentAssignment.user?.name || currentAssignment.user?.email || 'unknown user')} in ${condition} condition`
+      });
+
+    if (historyError) {
+      console.error('Error creating asset history:', historyError);
+      // Don't fail the request if history creation fails
+    }
 
     return NextResponse.json({ assignment: updatedAssignment });
   } catch (error) {

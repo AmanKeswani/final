@@ -1,45 +1,67 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { cookies } from 'next/headers';
-import { verifyAuthToken, getUserById } from '@/lib/auth';
-import { prisma } from '@/lib/prisma';
-import { canManageAssets } from '@/lib/rbac';
-import { AssetStatus } from '@prisma/client';
+import { getCurrentUser, hasRole } from '@/lib/auth-supabase';
+import { supabase } from '@/lib/supabase';
 
 // GET /api/assets - Get all assets
 export async function GET(request: NextRequest) {
   try {
-    const cookieStore = await cookies();
-    const token = cookieStore.get('auth-token')?.value;
+    const user = await getCurrentUser();
 
-    if (!token) {
+    if (!user) {
       return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
 
-    const decoded = await verifyAuthToken(token);
-    if (!decoded) {
-      return NextResponse.json({ error: 'Invalid token' }, { status: 401 });
+    // Get assets with current assignments and history count
+    const { data: assets, error } = await supabase
+      .from('assets')
+      .select(`
+        *,
+        assignments:asset_assignments!inner(
+          id,
+          assigned_at,
+          returned_at,
+          user:users(id, name, email)
+        ),
+        history_count:asset_history(count)
+      `)
+      .is('assignments.returned_at', null)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.error('Error fetching assets:', error);
+      return NextResponse.json({ error: 'Failed to fetch assets' }, { status: 500 });
     }
 
-    const user = await getUserById(decoded.userId);
+    // Also get assets without current assignments
+    const { data: unassignedAssets, error: unassignedError } = await supabase
+      .from('assets')
+      .select(`
+        *,
+        history_count:asset_history(count)
+      `)
+      .not('id', 'in', `(${assets?.map(a => a.id).join(',') || 'null'})`)
+      .order('created_at', { ascending: false });
 
-    if (!user) {
-      return NextResponse.json({ error: 'User not found' }, { status: 404 });
+    if (unassignedError) {
+      console.error('Error fetching unassigned assets:', unassignedError);
+      return NextResponse.json({ error: 'Failed to fetch unassigned assets' }, { status: 500 });
     }
 
-    const assets = await prisma.asset.findMany({
-      include: {
-        assignments: {
-          where: { returnedAt: null },
-          include: { user: { select: { id: true, name: true, email: true } } }
-        },
-        _count: {
-          select: { history: true }
-        }
-      },
-      orderBy: { createdAt: 'desc' }
-    });
+    // Combine and format the results
+    const allAssets = [
+      ...(assets || []).map(asset => ({
+        ...asset,
+        assignments: asset.assignments || [],
+        _count: { history: asset.history_count?.[0]?.count || 0 }
+      })),
+      ...(unassignedAssets || []).map(asset => ({
+        ...asset,
+        assignments: [],
+        _count: { history: asset.history_count?.[0]?.count || 0 }
+      }))
+    ];
 
-    return NextResponse.json({ assets });
+    return NextResponse.json({ assets: allAssets });
   } catch (error) {
     console.error('Error fetching assets:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
@@ -47,23 +69,15 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-
   try {
-    const cookieStore = await cookies();
-    const token = cookieStore.get('auth-token')?.value;
+    const user = await getCurrentUser();
 
-    if (!token) {
+    if (!user) {
       return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
 
-    const decoded = await verifyAuthToken(token);
-    if (!decoded) {
-      return NextResponse.json({ error: 'Invalid token' }, { status: 401 });
-    }
-
-    const user = await getUserById(decoded.userId);
-
-    if (!user || !canManageAssets(user.role)) {
+    // Check if user can manage assets (MANAGER or SUPER_ADMIN)
+    if (!hasRole(user.role, 'MANAGER')) {
       return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 });
     }
 
@@ -87,43 +101,53 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Ensure the newly created asset response includes relations for consistent client rendering
-    const asset = await prisma.asset.create({
-      data: {
+    // Create the asset
+    const { data: asset, error: createError } = await supabase
+      .from('assets')
+      .insert({
         name,
         description,
-        serialNumber,
+        serial_number: serialNumber,
         model,
         brand,
         category,
-        purchaseDate: purchaseDate ? new Date(purchaseDate) : null,
-        warrantyExpiry: warrantyExpiry ? new Date(warrantyExpiry) : null,
+        purchase_date: purchaseDate ? new Date(purchaseDate).toISOString() : null,
+        warranty_expiry: warrantyExpiry ? new Date(warrantyExpiry).toISOString() : null,
         value: value ? parseFloat(value) : null,
         location,
-        status: AssetStatus.AVAILABLE
-      },
-      include: {
-        assignments: {
-          where: { returnedAt: null },
-          include: { user: { select: { id: true, name: true, email: true } } }
-        },
-        _count: {
-          select: { history: true }
-        }
-      }
-    });
+        status: 'AVAILABLE'
+      })
+      .select()
+      .single();
+
+    if (createError) {
+      console.error('Error creating asset:', createError);
+      return NextResponse.json({ error: 'Failed to create asset' }, { status: 500 });
+    }
 
     // Create history entry
-    await prisma.assetHistory.create({
-      data: {
-        assetId: asset.id,
-        userId: user.id,
+    const { error: historyError } = await supabase
+      .from('asset_history')
+      .insert({
+        asset_id: asset.id,
+        user_id: user.id,
         action: 'created',
-        details: `Asset created by ${user.name || user.email}`
-      }
-    });
+        notes: `Asset created by ${user.name || user.email}`
+      });
 
-    return NextResponse.json({ asset }, { status: 201 });
+    if (historyError) {
+      console.error('Error creating asset history:', historyError);
+      // Don't fail the request if history creation fails
+    }
+
+    // Return asset with empty assignments and history count
+    const assetWithRelations = {
+      ...asset,
+      assignments: [],
+      _count: { history: 1 }
+    };
+
+    return NextResponse.json({ asset: assetWithRelations }, { status: 201 });
   } catch (error) {
     console.error('Error creating asset:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });

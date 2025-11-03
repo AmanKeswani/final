@@ -1,11 +1,9 @@
 import { NextResponse } from 'next/server';
-import { cookies } from 'next/headers';
+import { signOut } from '@/lib/auth-supabase';
 
 export async function POST() {
   try {
-    const cookieStore = await cookies();
-    cookieStore.delete('auth-token');
-
+    await signOut();
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error('Logout error:', error);

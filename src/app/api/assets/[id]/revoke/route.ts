@@ -1,9 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { cookies } from 'next/headers';
-import { verifyAuthToken, getUserById } from '@/lib/auth';
-import { prisma } from '@/lib/prisma';
-import { canManageAssets } from '@/lib/rbac';
-import { AssetStatus } from '@prisma/client';
+import { getCurrentUser, hasRole } from '@/lib/auth-supabase';
+import { supabase } from '@/lib/supabase';
 
 // POST /api/assets/[id]/revoke - Revoke asset from current user (mark assignment returned)
 export async function POST(
@@ -12,67 +9,82 @@ export async function POST(
 ) {
   const { id } = await params;
   try {
-    const cookieStore = await cookies();
-    const token = cookieStore.get('auth-token')?.value;
+    const actor = await getCurrentUser();
 
-    if (!token) {
-      return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
-    }
-
-    const decoded = await verifyAuthToken(token);
-    if (!decoded) {
-      return NextResponse.json({ error: 'Invalid token' }, { status: 401 });
-    }
-    const actor = await getUserById(decoded.userId);
-
-    if (!actor || !canManageAssets(actor.role)) {
+    if (!actor || !hasRole(actor.role, 'MANAGER')) {
       return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 });
     }
 
     const { reason } = await request.json().catch(() => ({ reason: undefined }));
 
     // Find asset and its current active assignment
-    const asset = await prisma.asset.findUnique({
-      where: { id },
-      include: {
-        assignments: {
-          where: { returnedAt: null },
-          include: { user: true }
-        }
-      }
-    });
+    const { data: asset, error: assetError } = await supabase
+      .from('assets')
+      .select(`
+        *,
+        assignments:asset_assignments!asset_assignments_asset_id_fkey(
+          *,
+          user:users(id, name, email)
+        )
+      `)
+      .eq('id', id)
+      .is('assignments.returned_at', null)
+      .single();
 
-    if (!asset) {
+    if (assetError || !asset) {
       return NextResponse.json({ error: 'Asset not found' }, { status: 404 });
     }
 
-    const activeAssignment = asset.assignments[0];
-
-    if (!activeAssignment) {
+    if (!asset.assignments || asset.assignments.length === 0) {
       return NextResponse.json({ error: 'Asset is not currently assigned' }, { status: 400 });
     }
 
+    const activeAssignment = asset.assignments[0];
     const targetUser = activeAssignment.user;
 
-    // Mark returned and set asset AVAILABLE; record history
-    await prisma.$transaction([
-      prisma.assetAssignment.update({
-        where: { id: activeAssignment.id },
-        data: { returnedAt: new Date(), notes: reason ? `${activeAssignment.notes ? activeAssignment.notes + ' | ' : ''}Revoked: ${reason}` : activeAssignment.notes }
-      }),
-      prisma.asset.update({
-        where: { id },
-        data: { status: AssetStatus.AVAILABLE }
-      }),
-      prisma.assetHistory.create({
-        data: {
-          assetId: id,
-          userId: actor.id,
-          action: 'revoked',
-          details: `Asset revoked from ${targetUser?.name || targetUser?.email}.${reason ? ' Reason: ' + reason : ''}`
-        }
+    // Update assignment to mark as returned
+    const updatedNotes = reason 
+      ? `${activeAssignment.notes ? activeAssignment.notes + ' | ' : ''}Revoked: ${reason}` 
+      : activeAssignment.notes;
+
+    const { error: assignmentError } = await supabase
+      .from('asset_assignments')
+      .update({
+        returned_at: new Date().toISOString(),
+        notes: updatedNotes
       })
-    ]);
+      .eq('id', activeAssignment.id);
+
+    if (assignmentError) {
+      console.error('Error updating assignment:', assignmentError);
+      return NextResponse.json({ error: 'Failed to revoke asset' }, { status: 500 });
+    }
+
+    // Update asset status to AVAILABLE
+    const { error: assetUpdateError } = await supabase
+      .from('assets')
+      .update({ status: 'AVAILABLE' })
+      .eq('id', id);
+
+    if (assetUpdateError) {
+      console.error('Error updating asset status:', assetUpdateError);
+      // Don't fail the request if status update fails
+    }
+
+    // Create history entry
+    const { error: historyError } = await supabase
+      .from('asset_history')
+      .insert({
+        asset_id: id,
+        user_id: actor.id,
+        action: 'revoked',
+        notes: `Asset revoked from ${targetUser?.name || targetUser?.email}.${reason ? ' Reason: ' + reason : ''}`
+      });
+
+    if (historyError) {
+      console.error('Error creating asset history:', historyError);
+      // Don't fail the request if history creation fails
+    }
 
     return NextResponse.json({ success: true }, { status: 200 });
   } catch (error) {
